@@ -80,16 +80,16 @@
         <div id="controls-picker" class="scene-controls" style="display: none;">
             <div class="card mb-4">
                 <h3 style="font-size: 1rem; margin-bottom: 0.75rem;">Picker Controls</h3>
-                <div class="flex items-center gap-2 mb-2">
-                    <input type="checkbox" id="pickerUseTeamGen" onchange="togglePickerSource()" checked>
-                    <label for="pickerUseTeamGen" style="margin: 0;">Use Team Generator participants</label>
+                <div class="flex items-center gap-2 mb-2" style="flex-wrap: wrap;">
+                    <input type="checkbox" id="pickerUseTeamGen" onchange="togglePickerSource()" checked style="flex-shrink:0;">
+                    <label for="pickerUseTeamGen" style="margin: 0; word-break: break-word; white-space: normal; max-width: 90vw;">Use Team Generator participants</label>
                 </div>
                 <div id="pickerManualEntry" style="display: none;">
                     <textarea id="pickerNames" placeholder="Enter names, one per line" rows="4" style="resize: vertical;"></textarea>
                 </div>
-                <div class="flex items-center gap-2 mb-4 mt-2">
-                    <input type="checkbox" id="pickerRemoveAfter">
-                    <label for="pickerRemoveAfter" style="margin: 0;">Remove after picking</label>
+                <div class="flex items-center gap-2 mb-4 mt-2" style="flex-wrap: wrap;">
+                    <input type="checkbox" id="pickerRemoveAfter" style="flex-shrink:0;">
+                    <label for="pickerRemoveAfter" style="margin: 0; word-break: break-word; white-space: normal; max-width: 90vw;">Remove after picking</label>
                 </div>
                 <div class="flex gap-2 mb-2">
                     <button class="btn btn-primary" onclick="pickerSpin()" style="flex: 1;">Load & Spin</button>
