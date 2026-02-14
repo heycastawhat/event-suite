@@ -18,14 +18,6 @@
             <button class="btn btn-ghost" onclick="window.location.href='index.html'">← Back</button>
         </header>
 
-        <div class="broadcast-bar mb-4" id="broadcastBar">
-            <div class="broadcast-status" id="broadcastStatus">
-                <span class="broadcast-dot" id="broadcastDot"></span>
-                <span id="broadcastLabel">Preview Mode</span>
-            </div>
-            <button class="btn broadcast-btn" id="broadcastBtn" onclick="pushLive()">Push Live</button>
-        </div>
-
         <div class="scene-switcher mb-4">
             <button class="scene-btn" data-scene="welcome" onclick="switchScene('welcome')">Welcome</button>
             <button class="scene-btn" data-scene="teams" onclick="switchScene('teams')">Teams</button>
@@ -35,6 +27,7 @@
             <button class="scene-btn" data-scene="schedule" onclick="switchScene('schedule')">Schedule</button>
             <button class="scene-btn" data-scene="message" onclick="switchScene('message')">Message</button>
             <button class="scene-btn" data-scene="slides" onclick="switchScene('slides')">Slides</button>
+            <button class="scene-btn" data-scene="camera" onclick="switchScene('camera')">Camera</button>
             <button class="scene-btn" data-scene="waiting" onclick="switchScene('waiting')">Waiting</button>
             <button class="scene-btn" data-scene="blank" onclick="switchScene('blank')">Blank</button>
         </div>
@@ -195,6 +188,31 @@
             </div>
         </div>
 
+        <div id="controls-waiting" class="scene-controls" style="display: none;">
+            <div class="card">
+                <h3 style="font-size: 1rem; margin-bottom: 0.75rem;">Waiting Timer</h3>
+                <p class="text-muted text-sm mb-2">Time accumulates across uses. Reset to start fresh.</p>
+                <button class="btn btn-secondary" onclick="sendCommand('waiting-reset')" style="width: 100%;">Reset Timer</button>
+            </div>
+        </div>
+
+        <div id="controls-camera" class="scene-controls" style="display: none;">
+            <div class="card mb-4">
+                <h3 style="font-size: 1rem; margin-bottom: 0.75rem;">Camera Controls</h3>
+                <div id="cameraPreview" style="position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden;margin-bottom:0.75rem;">
+                    <video id="ctrlCameraPreview" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+                </div>
+                <div class="flex gap-2 mb-2">
+                    <button class="btn btn-primary" id="cameraStartBtn" onclick="startCamera()" style="flex: 1;">Start Camera</button>
+                    <button class="btn btn-secondary" id="cameraStopBtn" onclick="stopCamera()" style="flex: 1; display: none;">Stop Camera</button>
+                </div>
+                <div class="flex gap-2">
+                    <button class="btn btn-secondary" id="cameraFlipBtn" onclick="flipCamera()" style="flex: 1; display: none;">Flip Camera</button>
+                </div>
+                <p class="text-muted text-sm mt-2">Streams your phone camera to the display via WebRTC.</p>
+            </div>
+        </div>
+
         <div class="bottom-bar mt-4">
             <button class="btn btn-secondary attention-btn" onclick="playAttentionAll()">Attention</button>
             <div class="flex gap-2 items-center mt-4">
@@ -241,6 +259,14 @@
         </div>
     </div>
 
+    <div class="broadcast-bar" id="broadcastBar">
+        <div class="broadcast-status" id="broadcastStatus">
+            <span class="broadcast-dot" id="broadcastDot"></span>
+            <span id="broadcastLabel">Preview Mode</span>
+        </div>
+        <button class="btn broadcast-btn" id="broadcastBtn" onclick="pushLive()">Push Live</button>
+    </div>
+
     <style>
         html, body {
             overflow-x: hidden;
@@ -250,16 +276,21 @@
         .container {
             overflow-x: hidden;
             box-sizing: border-box;
+            padding-bottom: 4.5rem;
         }
 
         .broadcast-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0.6rem 1rem;
+            padding: 0.75rem 1rem;
             background: var(--bg-secondary);
-            border: 2px solid var(--border);
-            border-radius: var(--radius-lg);
+            border-top: 2px solid var(--border);
+            z-index: 900;
         }
 
         .broadcast-status {
@@ -1137,6 +1168,71 @@
             updateSlideControls();
         }
 
+        // Camera controls
+        let _cameraStream = null;
+        let _controllerPC = null;
+        let _cameraFacing = 'environment';
+
+        function startCamera() {
+            var constraints = { video: { facingMode: _cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+            navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+                _cameraStream = stream;
+                document.getElementById('ctrlCameraPreview').srcObject = stream;
+                document.getElementById('cameraStartBtn').style.display = 'none';
+                document.getElementById('cameraStopBtn').style.display = '';
+                document.getElementById('cameraFlipBtn').style.display = '';
+                startWebRTC(stream);
+            }).catch(function(err) {
+                alert('Could not access camera: ' + err.message);
+            });
+        }
+
+        function stopCamera() {
+            if (_controllerPC) {
+                _controllerPC.close();
+                _controllerPC = null;
+            }
+            if (_cameraStream) {
+                _cameraStream.getTracks().forEach(function(t) { t.stop(); });
+                _cameraStream = null;
+            }
+            document.getElementById('ctrlCameraPreview').srcObject = null;
+            document.getElementById('cameraStartBtn').style.display = '';
+            document.getElementById('cameraStopBtn').style.display = 'none';
+            document.getElementById('cameraFlipBtn').style.display = 'none';
+            _realSendCommand('camera-stop');
+        }
+
+        function flipCamera() {
+            _cameraFacing = _cameraFacing === 'environment' ? 'user' : 'environment';
+            if (_cameraStream) {
+                stopCamera();
+                setTimeout(startCamera, 300);
+            }
+        }
+
+        function startWebRTC(stream) {
+            if (_controllerPC) { _controllerPC.close(); }
+
+            _controllerPC = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+            stream.getTracks().forEach(function(track) {
+                _controllerPC.addTrack(track, stream);
+            });
+
+            _controllerPC.onicecandidate = function(ev) {
+                if (ev.candidate) {
+                    _realSendCommand('camera-ice-candidate-controller', { candidate: ev.candidate });
+                }
+            };
+
+            _controllerPC.createOffer().then(function(offer) {
+                return _controllerPC.setLocalDescription(offer);
+            }).then(function() {
+                _realSendCommand('camera-offer', { offer: _controllerPC.localDescription });
+            });
+        }
+
         // Init
         onCommand(function(type, data) {
             if (type === 'slides-next' && loadedSlides.length > 0) {
@@ -1150,6 +1246,15 @@
             if (type === 'slides-goto' && loadedSlides.length > 0) {
                 currentSlideIndex = data.index || 0;
                 updateSlideControls();
+            }
+            if (type === 'push-live') {
+                pushLive();
+            }
+            if (type === 'camera-answer' && _controllerPC) {
+                _controllerPC.setRemoteDescription(new RTCSessionDescription(data.answer)).catch(function(){});
+            }
+            if (type === 'camera-ice-candidate-display' && _controllerPC) {
+                _controllerPC.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(function(){});
             }
         });
 

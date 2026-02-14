@@ -1,2 +1,3 @@
 .DS_Store
-assets/.pptx-cache/
+.event-tools-cert.pem
+.event-tools-key.pem

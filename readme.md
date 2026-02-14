@@ -55,20 +55,8 @@ Drop files into the `assets/` folder and they'll appear in the Slides scene on t
 - **Images** (PNG, JPG, GIF, SVG, WebP) — shown fullscreen
 - **Videos** (MP4, WebM) — shown with play/pause controls from phone
 - **PDFs** — embedded viewer
-- **PowerPoint** (`.pptx`) — automatically converted to slide images (requires [LibreOffice](https://www.libreoffice.org/))
 
-### PPTX Support
-
-Drop `.pptx` files directly into `assets/`. If LibreOffice is installed, the server converts each slide to a PNG automatically (cached in `assets/.pptx-cache/`). Each slide appears as a separate image in the file list.
-
-**Install LibreOffice:**
-- macOS: `brew install --cask libreoffice`
-- Ubuntu/Debian: `sudo apt install libreoffice`
-- Windows: [download from libreoffice.org](https://www.libreoffice.org/download/)
-
-If LibreOffice isn't available, you can still export your `.pptx` as images manually (File → Export → Images) and drop them into `assets/`.
-
-### Navigation
+For PowerPoint: export your `.pptx` as images (File → Export → Images) and drop them into `assets/`. They'll sort alphabetically, so naming them `01.png`, `02.png`, etc. works well.
 
 Use the prev/next buttons on your phone, arrow keys on the display, or tap thumbnails. The controller also shows a preview of the next slide.
 

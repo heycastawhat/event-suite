@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """Event Tools — local server with real-time command relay. No dependencies."""
-import glob as globmod
-import hashlib
 import http.server
 import json
 import os
 import queue
-import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import threading
 import webbrowser
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+DEBUG = "--debug" in sys.argv
+_args = [a for a in sys.argv[1:] if a != "--debug"]
+PORT = int(_args[0]) if _args else 8000
 DIR = os.path.dirname(os.path.abspath(__file__))
-PPTX_CACHE = os.path.join(DIR, "assets", ".pptx-cache")
-_soffice_bin = shutil.which("soffice")
-_convert_lock = threading.Lock()
-
+CERT_FILE = os.path.join(DIR, ".event-tools-cert.pem")
+KEY_FILE = os.path.join(DIR, ".event-tools-key.pem")
 clients = []
 clients_lock = threading.Lock()
 
@@ -54,61 +52,6 @@ def broadcast(data):
                 dead.append(q)
         for q in dead:
             clients.remove(q)
-
-
-def _pptx_fingerprint(path):
-    st = os.stat(path)
-    h = hashlib.md5(f"{st.st_mtime}:{st.st_size}:{path}".encode()).hexdigest()[:12]
-    return h
-
-
-def _convert_pptx(pptx_path):
-    """Convert a .pptx to cached PNGs using LibreOffice. Returns list of image paths or []."""
-    if not _soffice_bin:
-        return []
-    fp = _pptx_fingerprint(pptx_path)
-    basename = os.path.splitext(os.path.basename(pptx_path))[0]
-    cache_dir = os.path.join(PPTX_CACHE, f"{basename}_{fp}")
-    manifest = os.path.join(cache_dir, "manifest.json")
-
-    if os.path.isfile(manifest):
-        with open(manifest) as f:
-            return json.load(f)
-
-    with _convert_lock:
-        # Double-check after acquiring lock
-        if os.path.isfile(manifest):
-            with open(manifest) as f:
-                return json.load(f)
-
-        os.makedirs(cache_dir, exist_ok=True)
-        try:
-            subprocess.run(
-                [_soffice_bin, "--headless", "--nologo", "--nofirststartwizard",
-                 "--convert-to", "png", "--outdir", cache_dir, pptx_path],
-                timeout=120, capture_output=True
-            )
-        except Exception as e:
-            sys.stderr.write(f"  PPTX conversion failed: {e}\n")
-            return []
-
-        pngs = sorted(globmod.glob(os.path.join(cache_dir, "*.png")))
-        if not pngs:
-            sys.stderr.write(f"  PPTX conversion produced no images for {pptx_path}\n")
-            return []
-
-        # LibreOffice outputs a single file for single-slide; for multi-slide it may
-        # produce multiple or a single file depending on version. Rename to ordered names.
-        result = []
-        for i, src in enumerate(pngs):
-            dest = os.path.join(cache_dir, f"slide-{i + 1:03d}.png")
-            if src != dest:
-                os.rename(src, dest)
-            result.append(dest)
-
-        with open(manifest, "w") as f:
-            json.dump(result, f)
-        return result
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -170,33 +113,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             files = []
             if os.path.isdir(assets_dir):
                 for root, dirs, filenames in os.walk(assets_dir):
-                    # Skip the pptx cache directory
-                    dirs[:] = [d for d in sorted(dirs) if d != ".pptx-cache"]
+                    dirs.sort()
                     for f in sorted(filenames):
                         if f.startswith("."):
                             continue
                         full = os.path.join(root, f)
                         rel = os.path.relpath(full, DIR)
                         ext = os.path.splitext(f)[1].lower()
-
-                        if ext in (".pptx",):
-                            slide_images = _convert_pptx(full)
-                            if slide_images:
-                                pptx_name = os.path.splitext(f)[0]
-                                for si, img_path in enumerate(slide_images):
-                                    img_rel = os.path.relpath(img_path, DIR)
-                                    files.append({
-                                        "name": f"{pptx_name} — Slide {si + 1}",
-                                        "path": "/" + img_rel.replace(os.sep, "/"),
-                                        "type": "image",
-                                        "source": f,
-                                    })
-                            else:
-                                if not _soffice_bin:
-                                    sys.stderr.write(f"  Skipping {f}: LibreOffice not found (install for PPTX support)\n")
-                                files.append({"name": f, "path": "/" + rel.replace(os.sep, "/"), "type": "other"})
-                            continue
-
                         kind = "other"
                         if ext in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"):
                             kind = "image"
@@ -227,8 +150,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        if "/api/events" not in args[0] and "/api/clients" not in args[0]:
-            sys.stderr.write(f"  {args[0]}\n")
+        if "/api/events" in args[0] or "/api/clients" in args[0]:
+            return
+        if not DEBUG and "/api/" in args[0]:
+            return
+        sys.stderr.write(f"  {args[0]}\n")
 
 
 class ThreadedHTTPServer(http.server.HTTPServer):
@@ -252,19 +178,46 @@ class ThreadedHTTPServer(http.server.HTTPServer):
             pass
 
 
+def ensure_cert():
+    """Generate a self-signed cert for HTTPS (needed for camera access on phones)."""
+    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        return True
+    try:
+        subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", KEY_FILE, "-out", CERT_FILE,
+                "-days", "365", "-nodes",
+                "-subj", "/CN=Event Tools",
+            ],
+            check=True, capture_output=True,
+        )
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
 def main():
     ips = get_local_ips()
     primary_ip = ips[0]
-    base = f"http://{primary_ip}:{PORT}"
+
+    use_https = ensure_cert()
+    scheme = "https" if use_https else "http"
+    base = f"{scheme}://{primary_ip}:{PORT}"
 
     server = ThreadedHTTPServer(("0.0.0.0", PORT), Handler)
+
+    if use_https:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(CERT_FILE, KEY_FILE)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
 
     print()
     print("  ╔══════════════════════════════════════════════════════╗")
     print("  ║              Event Tools is running!                ║")
     print("  ╚══════════════════════════════════════════════════════╝")
     print()
-    print(f"  Homepage:    http://localhost:{PORT}")
+    print(f"  Homepage:    {scheme}://localhost:{PORT}")
     print()
 
     if len(ips) == 1:
@@ -272,7 +225,7 @@ def main():
     else:
         print("  Network IPs:")
         for ip in ips:
-            print(f"    • http://{ip}:{PORT}")
+            print(f"    • {scheme}://{ip}:{PORT}")
     print()
 
     print("  ┌──────────────────────────────────────────────────────┐")
@@ -284,11 +237,16 @@ def main():
     print("  └──────────────────────────────────────────────────────┘")
     print()
     print("  Both devices must be on the same Wi-Fi network.")
+    if use_https:
+        print()
+        print("  ⚠  Using a self-signed certificate for camera access.")
+        print("     Your browser will show a security warning — click")
+        print('     "Advanced" → "Proceed" to accept it on each device.')
     print()
     print("  Press Ctrl+C to stop.")
     print()
 
-    webbrowser.open(f"http://localhost:{PORT}")
+    webbrowser.open(f"{scheme}://localhost:{PORT}")
 
     try:
         server.serve_forever()

@@ -14,7 +14,7 @@
         <div class="standby-content">
             <div class="standby-text">Waiting for controller...</div>
             <div class="standby-dots"><span></span><span></span><span></span></div>
-
+            <button id="goFullscreenBtn" class="fullscreen-btn" onclick="goFullscreen()">Go Fullscreen</button>
             <button id="revealSceneBtn" style="display:none;margin-top:2rem;padding:1rem 2rem;font-size:1.25rem;border-radius:8px;border:none;background:var(--accent);color:#fff;">Show Display</button>
         </div>
     </div>
@@ -81,6 +81,11 @@
         <div class="slides-content" id="slidesContent">
             <div class="slides-empty">No slides loaded</div>
         </div>
+    </div>
+
+    <div id="scene-camera" class="scene">
+        <video id="cameraVideo" class="camera-video" autoplay playsinline></video>
+        <div class="camera-status" id="cameraStatus">Waiting for camera...</div>
     </div>
 
     <div class="attention-flash" id="attentionFlash"></div>
@@ -567,6 +572,18 @@
         .standby-dots span:nth-child(2) { animation-delay: 0.2s; }
         .standby-dots span:nth-child(3) { animation-delay: 0.4s; }
 
+        .fullscreen-btn {
+            margin-top: 1.5rem;
+            padding: 1rem 2.5rem;
+            font-size: 1.25rem;
+            font-weight: 600;
+            border-radius: 8px;
+            border: 2px solid var(--accent);
+            background: var(--accent);
+            color: #fff;
+            cursor: pointer;
+        }
+
         @keyframes standbyPulse {
             0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); }
             30% { opacity: 1; transform: scale(1); }
@@ -575,6 +592,32 @@
         /* Blank */
         #scene-blank {
             background: #000;
+        }
+
+        /* Camera */
+        #scene-camera {
+            background: #000;
+        }
+
+        .camera-video {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+        }
+
+        .camera-status {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 1.5rem;
+            color: var(--text-muted);
+            pointer-events: none;
+        }
+
+        .camera-video:not([srcObject]) + .camera-status,
+        .camera-status.waiting {
+            display: block;
         }
 
         /* Waiting */
@@ -675,9 +718,12 @@
         let pickerWinner = null;
         let waitingStartTime = null;
         let waitingInterval = null;
+        let waitingAccumulated = 0;
         let slidesFiles = [];
         let slidesIndex = 0;
         let slidesLocalNav = false;
+        let _preBlankScene = null;
+        let _displayPC = null;
 
 
         // Mobile reveal logic
@@ -691,6 +737,7 @@
             document.getElementById('welcomeTitle').textContent = eventName;
             if (isMobile()) {
                 showScene('standby');
+                document.getElementById('goFullscreenBtn').style.display = 'none';
                 document.getElementById('revealSceneBtn').style.display = 'block';
                 document.getElementById('revealSceneBtn').onclick = function() {
                     if (_pendingScene) {
@@ -704,6 +751,32 @@
             }
 
         }
+
+        function goFullscreen() {
+            var el = document.documentElement;
+            var rfs = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+            if (rfs) rfs.call(el);
+            document.getElementById('goFullscreenBtn').style.display = 'none';
+        }
+
+        // Auto re-enter fullscreen on any click (Escape from clicker exits it)
+        document.addEventListener('click', function() {
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                goFullscreen();
+            }
+        });
+
+        // Re-show button if fullscreen is exited (e.g. by clicker's Escape key)
+        document.addEventListener('fullscreenchange', function() {
+            if (!document.fullscreenElement) {
+                document.getElementById('goFullscreenBtn').style.display = '';
+            }
+        });
+        document.addEventListener('webkitfullscreenchange', function() {
+            if (!document.webkitFullscreenElement) {
+                document.getElementById('goFullscreenBtn').style.display = '';
+            }
+        });
 
         function showScene(scene) {
             if (isMobile() && scene !== 'standby' && !window._sceneRevealAllowed) {
@@ -1021,11 +1094,22 @@
                 clearInterval(waitingInterval);
                 waitingInterval = null;
             }
+            if (waitingStartTime) {
+                waitingAccumulated += Date.now() - waitingStartTime;
+                waitingStartTime = null;
+            }
+        }
+
+        function resetWaiting() {
+            stopWaiting();
+            waitingAccumulated = 0;
+            document.getElementById('waitingTime').textContent = '00:00';
+            document.getElementById('waitingSub').textContent = '';
         }
 
         function updateWaiting() {
             if (!waitingStartTime) return;
-            const elapsed = Date.now() - waitingStartTime;
+            const elapsed = waitingAccumulated + (Date.now() - waitingStartTime);
             const totalSec = Math.floor(elapsed / 1000);
             const min = Math.floor(totalSec / 60);
             const sec = totalSec % 60;
@@ -1077,6 +1161,39 @@
             } else {
                 content.innerHTML = '<div class="slides-empty">' + escapeHtml(file.name) + '</div>';
             }
+        }
+
+        // Camera WebRTC (display = receiver)
+        function handleCameraOffer(offer) {
+            if (_displayPC) { _displayPC.close(); _displayPC = null; }
+
+            _displayPC = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+            _displayPC.ontrack = function(ev) {
+                var video = document.getElementById('cameraVideo');
+                video.srcObject = ev.streams[0];
+                document.getElementById('cameraStatus').style.display = 'none';
+            };
+
+            _displayPC.onicecandidate = function(ev) {
+                if (ev.candidate) {
+                    sendCommand('camera-ice-candidate-display', { candidate: ev.candidate });
+                }
+            };
+
+            _displayPC.onconnectionstatechange = function() {
+                if (_displayPC.connectionState === 'disconnected' || _displayPC.connectionState === 'failed') {
+                    document.getElementById('cameraStatus').style.display = '';
+                    document.getElementById('cameraStatus').textContent = 'Camera disconnected';
+                }
+            };
+
+            _displayPC.setRemoteDescription(new RTCSessionDescription(offer))
+                .then(function() { return _displayPC.createAnswer(); })
+                .then(function(answer) { return _displayPC.setLocalDescription(answer); })
+                .then(function() {
+                    sendCommand('camera-answer', { answer: _displayPC.localDescription });
+                });
         }
 
         // Command handler
@@ -1161,6 +1278,10 @@
                     flashAttention();
                     break;
 
+                case 'waiting-reset':
+                    resetWaiting();
+                    break;
+
                 case 'set-event-name':
                     if (data.name) {
                         localStorage.setItem('eventToolsEventName', data.name);
@@ -1236,10 +1357,71 @@
                     if (v2) v2.pause();
                     break;
 
+                case 'camera-offer':
+                    handleCameraOffer(data.offer);
+                    break;
+
+                case 'camera-ice-candidate-controller':
+                    if (_displayPC) {
+                        _displayPC.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(function(){});
+                    }
+                    break;
+
+                case 'camera-stop':
+                    if (_displayPC) { _displayPC.close(); _displayPC = null; }
+                    var cv = document.getElementById('cameraVideo');
+                    cv.srcObject = null;
+                    document.getElementById('cameraStatus').style.display = '';
+                    document.getElementById('cameraStatus').textContent = 'Waiting for camera...';
+                    break;
+
             }
         });
 
+        // Block Cmd+P print dialog at capture phase before browser handles it
+        window.addEventListener('keydown', function(e) {
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
+
         document.addEventListener('keydown', function(e) {
+            // B key — toggle blank screen
+            if (e.key === 'b' || e.key === 'B' || e.key === '.') {
+                e.preventDefault();
+                if (currentScene === 'blank') {
+                    if (_preBlankScene) {
+                        showScene(_preBlankScene);
+                        sendCommand('show-scene', { scene: _preBlankScene });
+                        _preBlankScene = null;
+                    }
+                } else {
+                    _preBlankScene = currentScene;
+                    showScene('blank');
+                    sendCommand('show-scene', { scene: 'blank' });
+                }
+                return;
+            }
+
+            // Logitech clicker "start presentation" sends:
+            // Cmd, Enter, Ctrl, Shift, Alt, Cmd+P, Shift+F5 then Escape on alternate press
+            // Swallow the whole burst and treat as push-live
+            if (e.key === 'F5' || e.key === 'Escape') {
+                e.preventDefault();
+                sendCommand('push-live');
+                return;
+            }
+            if (e.key === 'p' || e.key === 'P') {
+                e.preventDefault();
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                return;
+            }
+
+            // Arrow keys — slide navigation
             if (currentScene !== 'slides' || slidesFiles.length === 0) return;
             if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                 e.preventDefault();
