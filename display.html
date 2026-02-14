@@ -14,6 +14,7 @@
         <div class="standby-content">
             <div class="standby-text">Waiting for controller...</div>
             <div class="standby-dots"><span></span><span></span><span></span></div>
+
             <button id="revealSceneBtn" style="display:none;margin-top:2rem;padding:1rem 2rem;font-size:1.25rem;border-radius:8px;border:none;background:var(--accent);color:#fff;">Show Display</button>
         </div>
     </div>
@@ -625,14 +626,13 @@
             100% { opacity: 0; }
         }
         /* Slides */
+        #scene-slides {
+            padding: 0;
+            background: #000;
+        }
+
         .slides-counter {
-            position: absolute;
-            top: 1.5rem;
-            right: 2rem;
-            font-size: 1.25rem;
-            color: var(--text-muted);
-            font-variant-numeric: tabular-nums;
-            z-index: 2;
+            display: none;
         }
 
         .slides-content {
@@ -645,14 +645,14 @@
         }
 
         .slides-content img {
-            max-width: 100vw;
-            max-height: 100vh;
+            width: 100vw;
+            height: 100vh;
             object-fit: contain;
         }
 
         .slides-content video {
-            max-width: 100vw;
-            max-height: 100vh;
+            width: 100vw;
+            height: 100vh;
             object-fit: contain;
         }
 
@@ -677,6 +677,7 @@
         let waitingInterval = null;
         let slidesFiles = [];
         let slidesIndex = 0;
+        let slidesLocalNav = false;
 
 
         // Mobile reveal logic
@@ -701,6 +702,7 @@
             } else {
                 showScene('standby');
             }
+
         }
 
         function showScene(scene) {
@@ -1209,6 +1211,7 @@
                     break;
 
                 case 'slides-next':
+                    if (slidesLocalNav) { slidesLocalNav = false; break; }
                     if (slidesIndex < slidesFiles.length - 1) {
                         slidesIndex++;
                         loadSlide();
@@ -1216,6 +1219,7 @@
                     break;
 
                 case 'slides-prev':
+                    if (slidesLocalNav) { slidesLocalNav = false; break; }
                     if (slidesIndex > 0) {
                         slidesIndex--;
                         loadSlide();
@@ -1232,6 +1236,27 @@
                     if (v2) v2.pause();
                     break;
 
+            }
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (currentScene !== 'slides' || slidesFiles.length === 0) return;
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (slidesIndex < slidesFiles.length - 1) {
+                    slidesIndex++;
+                    loadSlide();
+                    slidesLocalNav = true;
+                    sendCommand('slides-next');
+                }
+            } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (slidesIndex > 0) {
+                    slidesIndex--;
+                    loadSlide();
+                    slidesLocalNav = true;
+                    sendCommand('slides-prev');
+                }
             }
         });
 

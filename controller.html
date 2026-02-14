@@ -18,6 +18,14 @@
             <button class="btn btn-ghost" onclick="window.location.href='index.html'">← Back</button>
         </header>
 
+        <div class="broadcast-bar mb-4" id="broadcastBar">
+            <div class="broadcast-status" id="broadcastStatus">
+                <span class="broadcast-dot" id="broadcastDot"></span>
+                <span id="broadcastLabel">Preview Mode</span>
+            </div>
+            <button class="btn broadcast-btn" id="broadcastBtn" onclick="pushLive()">Push Live</button>
+        </div>
+
         <div class="scene-switcher mb-4">
             <button class="scene-btn" data-scene="welcome" onclick="switchScene('welcome')">Welcome</button>
             <button class="scene-btn" data-scene="teams" onclick="switchScene('teams')">Teams</button>
@@ -171,6 +179,7 @@
                         <span class="text-sm" style="font-weight: 600;">Now Showing</span>
                         <span class="text-muted text-sm" id="ctrlSlideCounter">0 / 0</span>
                     </div>
+                    <div id="slidesNextPreview" class="slides-next-preview mb-2"></div>
                     <div class="flex gap-2 mb-2">
                         <button class="btn btn-secondary" onclick="sendCommand('slides-prev')" style="flex: 1; padding: 1rem; font-size: 1.25rem;">← Prev</button>
                         <button class="btn btn-secondary" onclick="sendCommand('slides-next')" style="flex: 1; padding: 1rem; font-size: 1.25rem;">Next →</button>
@@ -241,6 +250,43 @@
         .container {
             overflow-x: hidden;
             box-sizing: border-box;
+        }
+
+        .broadcast-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.6rem 1rem;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border);
+            border-radius: var(--radius-lg);
+        }
+
+        .broadcast-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .broadcast-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .broadcast-btn {
+            padding: 0.5rem 1.25rem;
+            font-weight: 700;
+            font-size: 0.85rem;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius);
         }
 
         .status-dot {
@@ -550,6 +596,35 @@
             border-color: var(--accent);
             background: var(--accent-subtle);
         }
+
+        .slides-next-preview {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5rem;
+            text-align: center;
+        }
+
+        .slides-next-preview .next-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+
+        .slides-next-preview img {
+            max-width: 100%;
+            max-height: 200px;
+            border-radius: 4px;
+            object-fit: contain;
+        }
+
+        .slides-next-preview .next-placeholder {
+            padding: 1rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
     </style>
 
     <script>
@@ -560,6 +635,41 @@
         let assetFiles = [];
         let loadedSlides = [];
         let currentSlideIndex = 0;
+
+        // Broadcast gating — queue commands until "Push Live"
+        const _realSendCommand = sendCommand;
+        let _commandQueue = {};
+        sendCommand = function(type, data) {
+            _commandQueue[type] = { type: type, data: data };
+            updateBroadcastBar();
+        };
+
+        function pushLive() {
+            var cmds = _commandQueue;
+            _commandQueue = {};
+            Object.keys(cmds).forEach(function(key) {
+                _realSendCommand(cmds[key].type, cmds[key].data);
+            });
+            updateBroadcastBar();
+        }
+
+        function updateBroadcastBar() {
+            var count = Object.keys(_commandQueue).length;
+            var dot = document.getElementById('broadcastDot');
+            var label = document.getElementById('broadcastLabel');
+            var btn = document.getElementById('broadcastBtn');
+            if (count > 0) {
+                dot.style.background = '#f0883e';
+                label.textContent = count + ' change' + (count > 1 ? 's' : '') + ' pending';
+                btn.textContent = 'Push Live';
+                btn.style.opacity = '1';
+            } else {
+                dot.style.background = 'var(--text-muted)';
+                label.textContent = 'Preview Mode';
+                btn.textContent = 'Push Live';
+                btn.style.opacity = '0.5';
+            }
+        }
 
         function switchScene(scene) {
             activeScene = scene;
@@ -986,6 +1096,25 @@
             document.getElementById('slidesVideoControls').style.display =
                 current && current.type === 'video' ? 'flex' : 'none';
 
+            var preview = document.getElementById('slidesNextPreview');
+            var nextIndex = currentSlideIndex + 1;
+            if (nextIndex < loadedSlides.length) {
+                var next = loadedSlides[nextIndex];
+                var inner = '<div class="next-label">Next Slide</div>';
+                if (next.type === 'image') {
+                    inner += '<img src="' + next.path + '" alt="' + next.name + '">';
+                } else if (next.type === 'video') {
+                    inner += '<div class="next-placeholder">▶ ' + next.name + '</div>';
+                } else if (next.type === 'pdf') {
+                    inner += '<div class="next-placeholder">PDF: ' + next.name + '</div>';
+                }
+                preview.innerHTML = inner;
+                preview.style.display = '';
+            } else {
+                preview.innerHTML = '<div class="next-label">Next Slide</div><div class="next-placeholder">Last slide</div>';
+                preview.style.display = '';
+            }
+
             renderSlideThumbnails();
         }
 
@@ -1016,6 +1145,10 @@
             }
             if (type === 'slides-prev' && loadedSlides.length > 0) {
                 if (currentSlideIndex > 0) currentSlideIndex--;
+                updateSlideControls();
+            }
+            if (type === 'slides-goto' && loadedSlides.length > 0) {
+                currentSlideIndex = data.index || 0;
                 updateSlideControls();
             }
         });

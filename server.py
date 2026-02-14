@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Event Tools — local server with real-time command relay. No dependencies."""
+import glob as globmod
+import hashlib
 import http.server
 import json
 import os
 import queue
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import webbrowser
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 DIR = os.path.dirname(os.path.abspath(__file__))
+PPTX_CACHE = os.path.join(DIR, "assets", ".pptx-cache")
+_soffice_bin = shutil.which("soffice")
+_convert_lock = threading.Lock()
 
 clients = []
 clients_lock = threading.Lock()
@@ -47,6 +54,61 @@ def broadcast(data):
                 dead.append(q)
         for q in dead:
             clients.remove(q)
+
+
+def _pptx_fingerprint(path):
+    st = os.stat(path)
+    h = hashlib.md5(f"{st.st_mtime}:{st.st_size}:{path}".encode()).hexdigest()[:12]
+    return h
+
+
+def _convert_pptx(pptx_path):
+    """Convert a .pptx to cached PNGs using LibreOffice. Returns list of image paths or []."""
+    if not _soffice_bin:
+        return []
+    fp = _pptx_fingerprint(pptx_path)
+    basename = os.path.splitext(os.path.basename(pptx_path))[0]
+    cache_dir = os.path.join(PPTX_CACHE, f"{basename}_{fp}")
+    manifest = os.path.join(cache_dir, "manifest.json")
+
+    if os.path.isfile(manifest):
+        with open(manifest) as f:
+            return json.load(f)
+
+    with _convert_lock:
+        # Double-check after acquiring lock
+        if os.path.isfile(manifest):
+            with open(manifest) as f:
+                return json.load(f)
+
+        os.makedirs(cache_dir, exist_ok=True)
+        try:
+            subprocess.run(
+                [_soffice_bin, "--headless", "--nologo", "--nofirststartwizard",
+                 "--convert-to", "png", "--outdir", cache_dir, pptx_path],
+                timeout=120, capture_output=True
+            )
+        except Exception as e:
+            sys.stderr.write(f"  PPTX conversion failed: {e}\n")
+            return []
+
+        pngs = sorted(globmod.glob(os.path.join(cache_dir, "*.png")))
+        if not pngs:
+            sys.stderr.write(f"  PPTX conversion produced no images for {pptx_path}\n")
+            return []
+
+        # LibreOffice outputs a single file for single-slide; for multi-slide it may
+        # produce multiple or a single file depending on version. Rename to ordered names.
+        result = []
+        for i, src in enumerate(pngs):
+            dest = os.path.join(cache_dir, f"slide-{i + 1:03d}.png")
+            if src != dest:
+                os.rename(src, dest)
+            result.append(dest)
+
+        with open(manifest, "w") as f:
+            json.dump(result, f)
+        return result
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -108,13 +170,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             files = []
             if os.path.isdir(assets_dir):
                 for root, dirs, filenames in os.walk(assets_dir):
-                    dirs.sort()
+                    # Skip the pptx cache directory
+                    dirs[:] = [d for d in sorted(dirs) if d != ".pptx-cache"]
                     for f in sorted(filenames):
                         if f.startswith("."):
                             continue
                         full = os.path.join(root, f)
                         rel = os.path.relpath(full, DIR)
                         ext = os.path.splitext(f)[1].lower()
+
+                        if ext in (".pptx",):
+                            slide_images = _convert_pptx(full)
+                            if slide_images:
+                                pptx_name = os.path.splitext(f)[0]
+                                for si, img_path in enumerate(slide_images):
+                                    img_rel = os.path.relpath(img_path, DIR)
+                                    files.append({
+                                        "name": f"{pptx_name} — Slide {si + 1}",
+                                        "path": "/" + img_rel.replace(os.sep, "/"),
+                                        "type": "image",
+                                        "source": f,
+                                    })
+                            else:
+                                if not _soffice_bin:
+                                    sys.stderr.write(f"  Skipping {f}: LibreOffice not found (install for PPTX support)\n")
+                                files.append({"name": f, "path": "/" + rel.replace(os.sep, "/"), "type": "other"})
+                            continue
+
                         kind = "other"
                         if ext in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"):
                             kind = "image"
