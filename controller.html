@@ -763,12 +763,14 @@
         let assetFiles = [];
         let loadedSlides = [];
         let currentSlideIndex = 0;
+        let _pdfPage = 0;
+        let _pdfTotalPages = 0;
 
         // Broadcast gating — queue commands until "Push Live"
         const _realSendCommand = sendCommand;
         let _commandQueue = {};
         // Commands that should bypass preview mode and apply immediately
-        const _immediateCommands = new Set(['timer-start','timer-stop','timer-reset','timer-set','timer-mode']);
+        const _immediateCommands = new Set(['timer-start','timer-stop','timer-reset','timer-set','timer-mode','slides-next','slides-prev','slides-goto','slides-pdf-goto']);
         sendCommand = function(type, data) {
             if (_immediateCommands.has(type)) {
                 _realSendCommand(type, data);
@@ -1230,6 +1232,8 @@
             if (loadedSlides.length === 0) return;
 
             currentSlideIndex = 0;
+            _pdfPage = 0;
+            _pdfTotalPages = 0;
             sendCommand('slides-load', { files: loadedSlides });
             sendCommand('show-scene', { scene: 'slides' });
 
@@ -1238,30 +1242,44 @@
         }
 
         function updateSlideControls() {
-            document.getElementById('ctrlSlideCounter').textContent =
-                (currentSlideIndex + 1) + ' / ' + loadedSlides.length;
-
             const current = loadedSlides[currentSlideIndex];
+            const isPdf = current && current.type === 'pdf' && _pdfTotalPages > 0;
+
+            if (isPdf) {
+                document.getElementById('ctrlSlideCounter').textContent =
+                    escapeHtml(current.name) + ' — page ' + _pdfPage + ' / ' + _pdfTotalPages +
+                    '  (file ' + (currentSlideIndex + 1) + ' / ' + loadedSlides.length + ')';
+            } else {
+                document.getElementById('ctrlSlideCounter').textContent =
+                    (currentSlideIndex + 1) + ' / ' + loadedSlides.length;
+            }
+
             document.getElementById('slidesVideoControls').style.display =
                 current && current.type === 'video' ? 'flex' : 'none';
 
             var preview = document.getElementById('slidesNextPreview');
-            var nextIndex = currentSlideIndex + 1;
-            if (nextIndex < loadedSlides.length) {
-                var next = loadedSlides[nextIndex];
-                var inner = '<div class="next-label">Next Slide</div>';
-                if (next.type === 'image') {
-                    inner += '<img src="' + next.path + '" alt="' + next.name + '">';
-                } else if (next.type === 'video') {
-                    inner += '<div class="next-placeholder">▶ ' + next.name + '</div>';
-                } else if (next.type === 'pdf') {
-                    inner += '<div class="next-placeholder">PDF: ' + next.name + '</div>';
-                }
-                preview.innerHTML = inner;
+            // If inside a multi-page PDF and not on last page, next goes to next PDF page
+            if (isPdf && _pdfPage < _pdfTotalPages) {
+                preview.innerHTML = '<div class="next-label">Next</div><div class="next-placeholder">Page ' + (_pdfPage + 1) + ' of ' + current.name + '</div>';
                 preview.style.display = '';
             } else {
-                preview.innerHTML = '<div class="next-label">Next Slide</div><div class="next-placeholder">Last slide</div>';
-                preview.style.display = '';
+                var nextIndex = currentSlideIndex + 1;
+                if (nextIndex < loadedSlides.length) {
+                    var next = loadedSlides[nextIndex];
+                    var inner = '<div class="next-label">Next Slide</div>';
+                    if (next.type === 'image') {
+                        inner += '<img src="' + next.path + '" alt="' + next.name + '">';
+                    } else if (next.type === 'video') {
+                        inner += '<div class="next-placeholder">▶ ' + next.name + '</div>';
+                    } else if (next.type === 'pdf') {
+                        inner += '<div class="next-placeholder">PDF: ' + next.name + '</div>';
+                    }
+                    preview.innerHTML = inner;
+                    preview.style.display = '';
+                } else {
+                    preview.innerHTML = '<div class="next-label">Next Slide</div><div class="next-placeholder">Last slide</div>';
+                    preview.style.display = '';
+                }
             }
 
             renderSlideThumbnails();
@@ -1385,16 +1403,43 @@
 
         // Init
         onCommand(function(type, data) {
+            if (type === 'pdf-page-update' && loadedSlides.length > 0) {
+                if (data.fileIndex === currentSlideIndex) {
+                    _pdfPage = data.page;
+                    _pdfTotalPages = data.total;
+                } else {
+                    currentSlideIndex = data.fileIndex;
+                    _pdfPage = data.page;
+                    _pdfTotalPages = data.total;
+                }
+                updateSlideControls();
+            }
             if (type === 'slides-next' && loadedSlides.length > 0) {
-                if (currentSlideIndex < loadedSlides.length - 1) currentSlideIndex++;
+                // Don't advance file index here — display handles PDF pages
+                // and sends pdf-page-update. Only advance if display moved files.
+                var cur = loadedSlides[currentSlideIndex];
+                var inPdf = cur && cur.type === 'pdf' && _pdfTotalPages > 1 && _pdfPage < _pdfTotalPages;
+                if (!inPdf && currentSlideIndex < loadedSlides.length - 1) {
+                    currentSlideIndex++;
+                    _pdfPage = 0;
+                    _pdfTotalPages = 0;
+                }
                 updateSlideControls();
             }
             if (type === 'slides-prev' && loadedSlides.length > 0) {
-                if (currentSlideIndex > 0) currentSlideIndex--;
+                var cur2 = loadedSlides[currentSlideIndex];
+                var inPdf2 = cur2 && cur2.type === 'pdf' && _pdfTotalPages > 1 && _pdfPage > 1;
+                if (!inPdf2 && currentSlideIndex > 0) {
+                    currentSlideIndex--;
+                    _pdfPage = 0;
+                    _pdfTotalPages = 0;
+                }
                 updateSlideControls();
             }
             if (type === 'slides-goto' && loadedSlides.length > 0) {
                 currentSlideIndex = data.index || 0;
+                _pdfPage = 0;
+                _pdfTotalPages = 0;
                 updateSlideControls();
             }
             if (type === 'push-live') {

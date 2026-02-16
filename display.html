@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="styles.css">
+    <script src="assets/pdf.min.js"></script>
     <script src="theme.js"></script>
     <script src="sync.js"></script>
     <title>Display - Event Suite</title>
@@ -731,6 +732,9 @@
         let slidesFiles = [];
         let slidesIndex = 0;
         let slidesLocalNav = false;
+        let _pdfDoc = null;
+        let _pdfPage = 0;
+        let _pdfTotalPages = 0;
         let _preBlankScene = null;
         let _displayPC = null;
 
@@ -1320,6 +1324,10 @@
             const content = document.getElementById('slidesContent');
             const counter = document.getElementById('slidesCounter');
 
+            _pdfDoc = null;
+            _pdfPage = 0;
+            _pdfTotalPages = 0;
+
             if (slidesFiles.length === 0) {
                 content.innerHTML = '<div class="slides-empty">No slides loaded</div>';
                 counter.textContent = '';
@@ -1334,10 +1342,42 @@
             } else if (file.type === 'video') {
                 content.innerHTML = '<video src="' + file.path + '" id="slideVideo" autoplay></video>';
             } else if (file.type === 'pdf') {
-                content.innerHTML = '<iframe src="' + file.path + '" style="width:100vw;height:100vh;border:none;"></iframe>';
+                content.innerHTML = '<canvas id="pdfCanvas" style="max-width:100vw;max-height:100vh;object-fit:contain;"></canvas>';
+                loadPdf(file.path);
             } else {
                 content.innerHTML = '<div class="slides-empty">' + escapeHtml(file.name) + '</div>';
             }
+        }
+
+        function loadPdf(url) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/pdf.worker.min.js';
+            pdfjsLib.getDocument(url).promise.then(function(pdf) {
+                _pdfDoc = pdf;
+                _pdfTotalPages = pdf.numPages;
+                _pdfPage = 1;
+                renderPdfPage();
+                sendCommand('pdf-page-update', { page: _pdfPage, total: _pdfTotalPages, fileIndex: slidesIndex });
+            });
+        }
+
+        function renderPdfPage() {
+            if (!_pdfDoc) return;
+            _pdfDoc.getPage(_pdfPage).then(function(page) {
+                var canvas = document.getElementById('pdfCanvas');
+                if (!canvas) return;
+                var ctx = canvas.getContext('2d');
+                // Scale to fill viewport
+                var vw = window.innerWidth;
+                var vh = window.innerHeight;
+                var unscaled = page.getViewport({ scale: 1 });
+                var scale = Math.min(vw / unscaled.width, vh / unscaled.height);
+                var viewport = page.getViewport({ scale: scale * devicePixelRatio });
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                canvas.style.width = (viewport.width / devicePixelRatio) + 'px';
+                canvas.style.height = (viewport.height / devicePixelRatio) + 'px';
+                page.render({ canvasContext: ctx, viewport: viewport });
+            });
         }
 
         // Camera WebRTC (display = receiver)
@@ -1513,7 +1553,11 @@
 
                 case 'slides-next':
                     if (slidesLocalNav) { slidesLocalNav = false; break; }
-                    if (slidesIndex < slidesFiles.length - 1) {
+                    if (_pdfDoc && _pdfPage < _pdfTotalPages) {
+                        _pdfPage++;
+                        renderPdfPage();
+                        sendCommand('pdf-page-update', { page: _pdfPage, total: _pdfTotalPages, fileIndex: slidesIndex });
+                    } else if (slidesIndex < slidesFiles.length - 1) {
                         slidesIndex++;
                         loadSlide();
                     }
@@ -1521,9 +1565,21 @@
 
                 case 'slides-prev':
                     if (slidesLocalNav) { slidesLocalNav = false; break; }
-                    if (slidesIndex > 0) {
+                    if (_pdfDoc && _pdfPage > 1) {
+                        _pdfPage--;
+                        renderPdfPage();
+                        sendCommand('pdf-page-update', { page: _pdfPage, total: _pdfTotalPages, fileIndex: slidesIndex });
+                    } else if (slidesIndex > 0) {
                         slidesIndex--;
                         loadSlide();
+                    }
+                    break;
+
+                case 'slides-pdf-goto':
+                    if (_pdfDoc && data.page >= 1 && data.page <= _pdfTotalPages) {
+                        _pdfPage = data.page;
+                        renderPdfPage();
+                        sendCommand('pdf-page-update', { page: _pdfPage, total: _pdfTotalPages, fileIndex: slidesIndex });
                     }
                     break;
 
