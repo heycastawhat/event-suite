@@ -102,6 +102,10 @@
 
     <div class="attention-flash" id="attentionFlash"></div>
 
+    <div id="laserDot" style="display:none;position:fixed;z-index:99999;pointer-events:none;transform:translate(-50%,-50%);">
+        <div style="width:14px;height:14px;background:#ff2222;border-radius:50%;box-shadow:0 0 20px 8px rgba(255,30,30,0.6),0 0 60px 20px rgba(255,30,30,0.2);"></div>
+    </div>
+
     <style>
         body {
             margin: 0;
@@ -1920,6 +1924,17 @@
                     cv.srcObject = null;
                     document.getElementById('cameraStatus').style.display = '';
                     document.getElementById('cameraStatus').textContent = 'Waiting for camera...';
+                    break;
+
+                case 'laser-move':
+                    var ld = document.getElementById('laserDot');
+                    ld.style.display = 'block';
+                    ld.style.left = (data.x * 100) + 'vw';
+                    ld.style.top = (data.y * 100) + 'vh';
+                    break;
+
+                case 'laser-hide':
+                    document.getElementById('laserDot').style.display = 'none';
                     break;
 
             }

@@ -356,6 +356,14 @@
 
         <div class="bottom-bar mt-4">
             <button class="btn btn-secondary attention-btn" onclick="playAttentionAll()">Attention</button>
+            <button class="btn btn-secondary" id="laserBtn" onclick="toggleLaser()">Laser</button>
+        </div>
+
+        <div id="laserPad" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);touch-action:none;cursor:crosshair;">
+            <div id="laserCloseBar" style="position:absolute;bottom:0;left:0;right:0;height:70px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;z-index:1;border-top:1px solid rgba(255,255,255,0.15);">
+                <span style="color:#fff;font-size:1rem;font-weight:600;letter-spacing:0.5px;">✕ Close Laser</span>
+            </div>
+            <div id="laserDotLocal" style="display:none;position:absolute;width:12px;height:12px;background:#ff3333;border-radius:50%;box-shadow:0 0 12px 4px rgba(255,50,50,0.7);pointer-events:none;transform:translate(-50%,-50%);"></div>
         </div>
 
         <!-- Inline customize card removed (moved to modal) -->
@@ -777,7 +785,7 @@
         const _realSendCommand = sendCommand;
         let _commandQueue = {};
         // Commands that should bypass preview mode and apply immediately
-        const _immediateCommands = new Set(['timer-start','timer-stop','timer-reset','timer-set','timer-mode','slides-next','slides-prev','slides-goto','slides-pdf-goto']);
+        const _immediateCommands = new Set(['timer-start','timer-stop','timer-reset','timer-set','timer-mode','slides-next','slides-prev','slides-goto','slides-pdf-goto','laser-move','laser-hide']);
         sendCommand = function(type, data) {
             if (_immediateCommands.has(type)) {
                 _realSendCommand(type, data);
@@ -1487,6 +1495,60 @@
                 if (raw) applyFeatures(JSON.parse(raw));
             } catch(e) {}
         }
+
+        // Laser pointer
+        let _laserActive = false;
+        let _laserThrottle = 0;
+
+        function toggleLaser() {
+            _laserActive = !_laserActive;
+            document.getElementById('laserPad').style.display = _laserActive ? 'block' : 'none';
+            document.getElementById('laserBtn').classList.toggle('active', _laserActive);
+            if (!_laserActive) {
+                document.getElementById('laserDotLocal').style.display = 'none';
+                _realSendCommand('laser-hide');
+            }
+        }
+
+        (function() {
+            const pad = document.getElementById('laserPad');
+            const dot = document.getElementById('laserDotLocal');
+            const closeBar = document.getElementById('laserCloseBar');
+
+            closeBar.addEventListener('touchstart', function(e) { e.stopPropagation(); e.preventDefault(); toggleLaser(); }, { passive: false });
+            closeBar.addEventListener('click', function(e) { e.stopPropagation(); toggleLaser(); });
+
+            function handlePointer(e) {
+                if (e.target === closeBar || closeBar.contains(e.target)) return;
+                e.preventDefault();
+                const touch = e.touches ? e.touches[0] : e;
+                const x = touch.clientX / window.innerWidth;
+                const y = touch.clientY / window.innerHeight;
+                dot.style.display = 'block';
+                dot.style.left = touch.clientX + 'px';
+                dot.style.top = touch.clientY + 'px';
+                const now = Date.now();
+                if (now - _laserThrottle < 33) return;
+                _laserThrottle = now;
+                _realSendCommand('laser-move', { x: x, y: y });
+            }
+
+            function handleEnd(e) {
+                if (e.target === closeBar || closeBar.contains(e.target)) return;
+                e.preventDefault();
+                dot.style.display = 'none';
+                _realSendCommand('laser-hide');
+            }
+
+            pad.addEventListener('touchstart', handlePointer, { passive: false });
+            pad.addEventListener('touchmove', handlePointer, { passive: false });
+            pad.addEventListener('touchend', handleEnd, { passive: false });
+            pad.addEventListener('touchcancel', handleEnd, { passive: false });
+            pad.addEventListener('mousedown', handlePointer);
+            pad.addEventListener('mousemove', function(e) { if (e.buttons) handlePointer(e); });
+            pad.addEventListener('mouseup', handleEnd);
+            pad.addEventListener('mouseleave', handleEnd);
+        })();
 
         init();
     </script>
