@@ -7,8 +7,9 @@ An open source Taskmaster style event toolkit. One device controls what appears 
 Only Python 3 required (no dependencies).
 
 ```bash
-python3 server.py          # Default port 8000
-python3 server.py 3000     # Custom port
+python3 server.py              # Default port 8000
+python3 server.py 3000         # Custom port
+python3 server.py --no-ocr     # Disable OCR (skip loading Tesseract)
 ```
 
 This opens the homepage in your browser and prints the local network URLs for both the controller and the display. That's it.
@@ -41,7 +42,7 @@ The green dot on the controller confirms the display is connected.
 
 Each tool also works on its own from the homepage:
 
-- **Team Generator** — create balanced teams with no-go constraints
+- **Team Generator** — create balanced teams with no-go constraints, OCR scan a class roll
 - **Scoring** — track scores per team across rounds
 - **Timer** — stopwatch and countdown with alarm
 - **Schedule** — event timeline with current-event tracking
@@ -65,6 +66,16 @@ Use the prev/next buttons on your phone, arrow keys on the display, or tap thumb
 ```bash
 python3 server.py 3000
 ```
+
+## OCR (Scan Roll)
+
+The Team Generator can scan a photo of a printed name list (class roll, sign-up sheet, etc.) and extract names using OCR. This runs entirely in the browser via [Tesseract.js](https://github.com/niceb/tesseract.js) — no internet required.
+
+The OCR engine files live in `assets/tesseract/` (~27 MB). If you don't need this feature, you can either:
+- Delete the `assets/tesseract/` folder, or
+- Launch with `python3 server.py --no-ocr`
+
+The "Scan Roll" button will only appear when the OCR files are available.
 
 ## How It Works
 
